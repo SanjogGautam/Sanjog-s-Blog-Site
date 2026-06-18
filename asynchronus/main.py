@@ -31,7 +31,7 @@ async def lifespan(app: FastAPI):
         await rbac.ensure_superadmin(db, settings.superadmin_email)
 
     yield
-    # shutdown
+    # shutdowns
     await engine.dispose()
 
 
@@ -160,16 +160,6 @@ async def forgot_password_page(request: Request):
 async def reset_password_page(request: Request, token: str):
     return templates.TemplateResponse(request, name="reset_password.html", context={"title": "Reset Password", "token": token})
 
-@app.get("/test-email", include_in_schema=False)
-async def test_email():
-    from email_utils import send_email
-    await send_email(
-        email_to="test@test.com",
-        subject="Test",
-        plain_text="It works.",
-        html_content=None,
-    )
-    return {"status": "sent"}
 
 @app.exception_handler(starletteHTTPException)
 async def general_http_excetption_handler(request: Request, exception: starletteHTTPException):

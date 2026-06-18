@@ -24,5 +24,6 @@ class Settings(BaseSettings):
     frontend_url: str = "http://localhost:8000"
 
     superadmin_email: EmailStr   # ✅ new — no default, so it's required in .env
-
+    #postgresql+asyncpg://user:password@localhost/dbname
+    database_url: str = "postgresql+asyncpg://bloguser:blogpass@localhost:5432/blogdb"
 settings = Settings()
