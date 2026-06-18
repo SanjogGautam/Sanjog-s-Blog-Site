@@ -1,0 +1,201 @@
+{% extends "base.html" %}
+
+{% block content %}
+{% if posts_list %}
+{% set author = posts_list[0].author %}
+
+<div class="d-flex align-items-center gap-3 mb-4 pb-3 border-bottom">
+    <img
+        src="{{ author.image_path }}"
+        alt="{{ author.username }}"
+        class="rounded-circle"
+        width="56" height="56"
+        style="object-fit: cover; border: 2px solid #dee2e6;"
+        onerror="this.src='/static/profile_pics/default.jpg'"
+    />
+    <div>
+        <div class="fw-semibold fs-5">{{ author.username }}</div>
+        <div class="text-muted small" id="postCount">
+            {{ posts_list | length }} post{% if posts_list | length != 1 %}s{% endif %}
+        </div>
+    </div>
+</div>
+
+<div class="list-group" id="postsList">
+    {% for post in posts_list %}
+    <div class="list-group-item py-3 px-4">
+        <div class="d-flex justify-content-between align-items-center">
+            <a href="/posts/{{ post.id }}" class="fw-medium text-decoration-none post-title-link">
+                {{ post.title }}
+            </a>
+            <div class="d-flex align-items-center gap-2 ms-3 flex-shrink-0">
+                <span class="text-muted small">{{ post.date_posted.strftime('%b %d, %Y') }}</span>
+                <div class="post-actions-{{ post.id }} d-flex gap-2" style="display:none!important;">
+                    <button
+                        class="btn btn-sm btn-outline-primary"
+                        onclick="openEditModal(`{{ post.id }}`, `{{ post.title | replace('`', '') }}`, `{{ post.content | replace('`', '') }}`)">
+                        Edit
+                    </button>
+                    <button class="btn btn-sm btn-outline-danger" onclick="deletePost({{ post.id }})">
+                        Delete
+                    </button>
+                </div>
+            </div>
+        </div>
+    </div>
+    {% endfor %}
+</div>
+
+{% if has_more %}
+<div class="text-center mt-4" id="loadMoreContainer">
+    <button class="btn btn-outline-secondary btn-sm px-4" id="loadMoreBtn" onclick="loadMore()">
+        Load More
+    </button>
+</div>
+{% endif %}
+
+<a href="/" class="text-muted small text-decoration-none d-inline-block mt-4">&larr; All posts</a>
+
+{% else %}
+<div class="text-center py-5">
+    <p class="text-muted mb-3">No posts yet.</p>
+    <button class="btn btn-primary btn-sm" onclick="openNewPostModal()">Write your first post</button>
+</div>
+{% endif %}
+
+<!-- Edit Modal -->
+<div class="modal fade" id="editModal" tabindex="-1">
+    <div class="modal-dialog">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h5 class="modal-title fw-semibold">Edit Post</h5>
+                <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+            </div>
+            <div class="modal-body">
+                <div id="editError" class="alert alert-danger d-none"></div>
+                <div class="mb-3">
+                    <label class="form-label fw-medium" for="editTitle">Title</label>
+                    <input type="text" class="form-control" id="editTitle" />
+                </div>
+                <div class="mb-3">
+                    <label class="form-label fw-medium" for="editContent">Content</label>
+                    <textarea class="form-control" id="editContent" rows="6"></textarea>
+                </div>
+            </div>
+            <div class="modal-footer">
+                <button type="button" class="btn btn-outline-secondary" data-bs-dismiss="modal">Cancel</button>
+                <button type="button" class="btn btn-primary" onclick="saveEdit()">Save Changes</button>
+            </div>
+        </div>
+    </div>
+</div>
+
+{% if posts_list %}
+<script>
+    const USER_ID    = {{ posts_list[0].author.id }};
+    let currentSkip  = {{ posts_list | length }};
+    const limit      = {{ limit }};
+    let hasMore      = {{ 'true' if has_more else 'false' }};
+    let loading      = false;
+
+    const POST_USER_IDS = {
+        {% for post in posts_list %}
+        {{ post.id }}: {{ post.author.id }}{% if not loop.last %},{% endif %}
+        {% endfor %}
+    };
+
+    // ── Show edit/delete for owned posts ──────────
+    async function checkOwnership(idsMap) {
+        const token = getToken();
+        if (!token) return;
+        try {
+            const res = await fetch('/api/auth/me', {
+                headers: { 'Authorization': `Bearer ${token}` }
+            });
+            if (!res.ok) return;
+            const user = await res.json();
+            for (const [postId, authorId] of Object.entries(idsMap)) {
+                if (user.id === authorId) {
+                    const el = document.querySelector(`.post-actions-${postId}`);
+                    if (el) el.style.setProperty('display', 'flex', 'important');
+                }
+            }
+            return user;
+        } catch (e) { console.error(e); }
+    }
+
+    document.addEventListener('DOMContentLoaded', () => checkOwnership(POST_USER_IDS));
+
+    // ── Load more posts ───────────────────────────
+    async function loadMore() {
+        if (loading || !hasMore) return;
+        loading = true;
+
+        const btn = document.getElementById('loadMoreBtn');
+        btn.disabled    = true;
+        btn.textContent = 'Loading...';
+
+        try {
+            const res = await fetch(`/api/users/${USER_ID}/posts?skip=${currentSkip}&limit=${limit}`);
+            if (!res.ok) throw new Error('Failed');
+            const data = await res.json();
+
+            const container = document.getElementById('postsList');
+            const newIds    = {};
+
+            data.posts.forEach(post => {
+                const date = new Date(post.date_posted).toLocaleDateString('en-US', {
+                    month: 'short', day: 'numeric', year: 'numeric'
+                });
+
+                const item = document.createElement('div');
+                item.className = 'list-group-item py-3 px-4';
+                item.innerHTML = `
+                    <div class="d-flex justify-content-between align-items-center">
+                        <a href="/posts/${post.id}" class="fw-medium text-decoration-none post-title-link">
+                            ${post.title}
+                        </a>
+                        <div class="d-flex align-items-center gap-2 ms-3 flex-shrink-0">
+                            <span class="text-muted small">${date}</span>
+                            <div class="post-actions-${post.id} d-flex gap-2" style="display:none!important;">
+                                <button class="btn btn-sm btn-outline-primary"
+                                    onclick="openEditModal(\`${post.id}\`, \`${post.title.replace(/\`/g,'')}\`, \`${post.content.replace(/\`/g,'')}\`)">
+                                    Edit
+                                </button>
+                                <button class="btn btn-sm btn-outline-danger"
+                                    onclick="deletePost(${post.id})">
+                                    Delete
+                                </button>
+                            </div>
+                        </div>
+                    </div>
+                `;
+                container.appendChild(item);
+                newIds[post.id] = post.author.id;
+            });
+
+            // check ownership for newly loaded posts
+            await checkOwnership(newIds);
+
+            currentSkip += data.posts.length;
+            hasMore      = data.has_more;
+
+            document.getElementById('postCount').textContent =
+                `${currentSkip} post${currentSkip !== 1 ? 's' : ''}`;
+
+            if (!hasMore) {
+                document.getElementById('loadMoreContainer').style.display = 'none';
+            } else {
+                btn.disabled    = false;
+                btn.textContent = 'Load More';
+            }
+        } catch (e) {
+            console.error(e);
+            btn.disabled    = false;
+            btn.textContent = 'Try again';
+        }
+        loading = false;
+    }
+</script>
+{% endif %}
+{% endblock %}

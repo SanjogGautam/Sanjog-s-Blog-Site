@@ -1,0 +1,138 @@
+{% extends "base.html" %}
+
+{% block content %}
+<div class="d-flex justify-content-between align-items-center mb-4">
+    <h4 class="mb-0 fw-semibold">All Posts</h4>
+    <span class="text-muted small" id="postCount">{{ posts_list | length }} of {{ posts_list | length }} posts</span>
+</div>
+
+{% if posts_list %}
+<div class="d-flex flex-column gap-3" id="postsList">
+    {% for post in posts_list %}
+    <a href="/posts/{{ post.id }}" class="text-decoration-none">
+        <div class="post-card p-4">
+            <div class="d-flex justify-content-between align-items-start gap-3">
+                <div class="flex-grow-1 overflow-hidden">
+                    <h5 class="fw-semibold mb-1 post-card-title">{{ post.title }}</h5>
+                    <p class="text-muted small mb-0 text-truncate">{{ post.content }}</p>
+                </div>
+                <div class="text-end flex-shrink-0">
+                    <div class="small text-muted mb-1">{{ post.date_posted.strftime('%b %d, %Y') }}</div>
+                    <div class="d-flex align-items-center justify-content-end gap-1">
+                        <img
+                            src="{{ post.author.image_path }}"
+                            class="rounded-circle"
+                            width="18" height="18"
+                            style="object-fit:cover;"
+                            onerror="this.src='/static/profile_pics/default.jpg'"
+                        />
+                        <span class="small text-muted">{{ post.author.username }}</span>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </a>
+    {% endfor %}
+</div>
+
+<!-- Load More button -->
+{% if has_more %}
+<div class="text-center mt-4" id="loadMoreContainer">
+    <button
+        class="btn btn-outline-secondary btn-sm px-4"
+        id="loadMoreBtn"
+        onclick="loadMore()"
+    >
+        Load More
+    </button>
+</div>
+{% endif %}
+
+{% else %}
+<div class="text-center py-5">
+    <p class="text-muted mb-3">No posts yet.</p>
+    <button class="btn btn-primary btn-sm" onclick="openNewPostModal()">Write the first one</button>
+</div>
+{% endif %}
+
+<script>
+    let currentSkip  = {{ posts_list | length }};
+    const limit      = {{ limit }};
+    let hasMore      = {{ 'true' if has_more else 'false' }};
+    let loading      = false;
+
+    async function loadMore() {
+        if (loading || !hasMore) return;
+        loading = true;
+
+        const btn = document.getElementById('loadMoreBtn');
+        btn.disabled    = true;
+        btn.textContent = 'Loading...';
+
+        try {
+            const res = await fetch(`/api/posts?skip=${currentSkip}&limit=${limit}`);
+            if (!res.ok) throw new Error('Failed to fetch');
+
+            const data = await res.json();
+            // data = { posts: [...], total, skip, limit, has_more }
+
+            const container = document.getElementById('postsList');
+
+            data.posts.forEach(post => {
+                const date = new Date(post.date_posted).toLocaleDateString('en-US', {
+                    month: 'short', day: 'numeric', year: 'numeric'
+                });
+                const imgSrc = post.author.image_path || '/static/profile_pics/default.jpg';
+
+                const card = document.createElement('a');
+                card.href      = `/posts/${post.id}`;
+                card.className = 'text-decoration-none';
+                card.innerHTML = `
+                    <div class="post-card p-4">
+                        <div class="d-flex justify-content-between align-items-start gap-3">
+                            <div class="flex-grow-1 overflow-hidden">
+                                <h5 class="fw-semibold mb-1 post-card-title">${post.title}</h5>
+                                <p class="text-muted small mb-0 text-truncate">${post.content}</p>
+                            </div>
+                            <div class="text-end flex-shrink-0">
+                                <div class="small text-muted mb-1">${date}</div>
+                                <div class="d-flex align-items-center justify-content-end gap-1">
+                                    <img src="${imgSrc}"
+                                         class="rounded-circle"
+                                         width="18" height="18"
+                                         style="object-fit:cover;"
+                                         onerror="this.src='/static/profile_pics/default.jpg'" />
+                                    <span class="small text-muted">${post.author.username}</span>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                `;
+                container.appendChild(card);
+            });
+
+            currentSkip += data.posts.length;
+            hasMore      = data.has_more;
+
+            // update count
+            document.getElementById('postCount').textContent =
+                `${currentSkip} of ${data.total} posts`;
+
+            // hide button if no more
+            if (!hasMore) {
+                document.getElementById('loadMoreContainer').style.display = 'none';
+            } else {
+                btn.disabled    = false;
+                btn.textContent = 'Load More';
+            }
+
+        } catch (err) {
+            console.error(err);
+            btn.disabled    = false;
+            btn.textContent = 'Try again';
+        }
+
+        loading = false;
+    }
+</script>
+{% endblock %}

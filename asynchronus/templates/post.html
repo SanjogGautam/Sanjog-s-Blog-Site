@@ -1,0 +1,122 @@
+{% extends "base.html" %}
+
+{% block content %}
+<a href="/" class="text-decoration-none small d-inline-flex align-items-center gap-1 mb-4" style="color: var(--bs-secondary-color);">
+    &#8592; Back to posts
+</a>
+
+<article class="post-article">
+
+    <!-- Title -->
+    <h1 class="post-article-title mb-3">{{ post.title }}</h1>
+
+    <!-- Author row -->
+    <div class="d-flex align-items-center justify-content-between mb-4 pb-4 post-article-meta">
+        <div class="d-flex align-items-center gap-3">
+            <img
+                src="{{ post.author.image_path }}"
+                alt="{{ post.author.username }}"
+                class="rounded-circle post-article-avatar"
+                width="38" height="38"
+                style="object-fit: cover;"
+                onerror="this.src='/static/profile_pics/default.jpg'"
+            />
+            <div>
+                <a href="/users/{{ post.author.id }}/posts" class="text-decoration-none fw-medium post-title-link" style="font-size:0.9rem;">
+                    {{ post.author.username }}
+                </a>
+                <div class="text-muted" style="font-size:0.8rem;">
+                    {{ post.date_posted.strftime('%B %d, %Y') }}
+                    &middot;
+                    {{ (post.content | length / 200) | int + 1 }} min read
+                </div>
+            </div>
+        </div>
+
+        <!-- Edit/Delete — shown by JS if owner -->
+        <div class="d-flex gap-2" id="postActions" style="display:none!important;">
+            <button class="btn btn-sm btn-outline-secondary"
+                onclick="openEditModal(`{{ post.id }}`, `{{ post.title | replace('`', '') }}`, `{{ post.content | replace('`', '') }}`)">
+                Edit
+            </button>
+            <button class="btn btn-sm btn-outline-danger" onclick="deletePost({{ post.id }})">
+                Delete
+            </button>
+        </div>
+    </div>
+
+    <!-- Content body -->
+    <div class="post-article-body">
+        {% for para in post.content.split('\n\n') %}
+            {% if para.strip() %}<p>{{ para.strip() }}</p>{% endif %}
+        {% endfor %}
+    </div>
+
+</article>
+
+<!-- Bottom author card -->
+<div class="post-author-card mt-5 pt-4">
+    <div class="d-flex align-items-center gap-3">
+        <img
+            src="{{ post.author.image_path }}"
+            alt="{{ post.author.username }}"
+            class="rounded-circle"
+            width="48" height="48"
+            style="object-fit: cover;"
+            onerror="this.src='/static/profile_pics/default.jpg'"
+        />
+        <div>
+            <div class="fw-medium">{{ post.author.username }}</div>
+            <a href="/users/{{ post.author.id }}/posts" class="small text-decoration-none" style="color: var(--bs-secondary-color);">
+                View all posts &rarr;
+            </a>
+        </div>
+    </div>
+</div>
+
+<!-- Edit Modal -->
+<div class="modal fade" id="editModal" tabindex="-1">
+    <div class="modal-dialog">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h5 class="modal-title fw-medium">Edit Post</h5>
+                <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+            </div>
+            <div class="modal-body">
+                <div id="editError" class="alert alert-danger d-none"></div>
+                <div class="mb-3">
+                    <label class="form-label small text-secondary" for="editTitle">Title</label>
+                    <input type="text" class="form-control" id="editTitle" />
+                </div>
+                <div class="mb-3">
+                    <label class="form-label small text-secondary" for="editContent">Content</label>
+                    <textarea class="form-control" id="editContent" rows="6"></textarea>
+                </div>
+            </div>
+            <div class="modal-footer">
+                <button type="button" class="btn btn-outline-secondary" data-bs-dismiss="modal">Cancel</button>
+                <button type="button" class="btn btn-primary" onclick="saveEdit()">Save Changes</button>
+            </div>
+        </div>
+    </div>
+</div>
+
+<script>
+    const POST_AUTHOR_ID = {{ post.author.id }};
+    document.addEventListener('DOMContentLoaded', async function () {
+        const token = getToken();
+        if (!token) return;
+        try {
+            const res = await fetch('/api/auth/me', { headers: { 'Authorization': `Bearer ${token}` } });
+            if (!res.ok) return;
+            const user = await res.json();
+            const roles = user.roles || [];
+            const isPrivileged = roles.includes('admin') || roles.includes('superadmin');
+
+            if (user.id === POST_AUTHOR_ID || isPrivileged) {
+                document.getElementById('postActions').style.display = 'flex';
+            }
+        } catch (e) { console.error(e); }
+    });
+</script>
+{% endblock %}

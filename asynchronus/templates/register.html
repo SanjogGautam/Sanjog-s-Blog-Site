@@ -1,0 +1,96 @@
+{% extends "base.html" %}
+
+{% block content %}
+<div class="d-flex justify-content-center">
+    <div class="card border-0 shadow-sm" style="max-width: 420px; width: 100%;">
+        <div class="card-body p-4">
+            <h4 class="fw-semibold mb-1">Create an account</h4>
+            <p class="text-muted small mb-4">Join and start posting</p>
+
+            <div id="registerError" class="alert alert-danger d-none"></div>
+
+            <form id="registerForm">
+                <div class="mb-3">
+                    <label class="form-label fw-medium" for="username">Username</label>
+                    <input type="text" class="form-control" id="username" placeholder="yourname" required minlength="3" maxlength="40" />
+                </div>
+
+                <div class="mb-3">
+                    <label class="form-label fw-medium" for="email">Email</label>
+                    <input type="email" class="form-control" id="email" placeholder="you@example.com" required />
+                </div>
+
+                <div class="mb-3">
+                    <label class="form-label fw-medium" for="password">Password</label>
+                    <input type="password" class="form-control" id="password" placeholder="At least 6 characters" required minlength="6" />
+                </div>
+
+                <button type="submit" class="btn btn-primary w-100">Register</button>
+            </form>
+
+            <p class="text-center small text-muted mt-4 mb-0">
+                Already have an account? <a href="/login">Log in</a>
+            </p>
+        </div>
+    </div>
+</div>
+
+<script>
+    document.getElementById('registerForm').addEventListener('submit', async function (e) {
+        e.preventDefault();
+
+        const username = document.getElementById('username').value.trim();
+        const email     = document.getElementById('email').value.trim();
+        const password  = document.getElementById('password').value;
+        const errorDiv  = document.getElementById('registerError');
+        errorDiv.classList.add('d-none');
+
+        try {
+            // 1. Register the user
+            const res = await fetch('/api/auth/register', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ username, email, password })
+            });
+
+            const data = await res.json();
+
+            if (!res.ok) {
+                // Pydantic validation errors come as a list
+                if (Array.isArray(data.detail)) {
+                    errorDiv.textContent = data.detail.map(d => d.msg).join(', ');
+                } else {
+                    errorDiv.textContent = data.detail || 'Registration failed.';
+                }
+                errorDiv.classList.remove('d-none');
+                return;
+            }
+
+            // 2. Auto-login after successful registration
+            const formData = new URLSearchParams();
+            formData.append('username', email);
+            formData.append('password', password);
+
+            const loginRes = await fetch('/api/auth/token', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+                body: formData
+            });
+
+            const loginData = await loginRes.json();
+
+            if (loginRes.ok) {
+                setToken(loginData.access_token);  // ← from auth.js
+                window.location.href = '/';
+            } else {
+                // registration worked but auto-login failed — send to login page
+                window.location.href = '/login';
+            }
+
+        } catch (err) {
+            errorDiv.textContent = 'Network error. Try again.';
+            errorDiv.classList.remove('d-none');
+        }
+    });
+</script>
+{% endblock %}

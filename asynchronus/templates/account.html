@@ -1,0 +1,392 @@
+{% extends "base.html" %}
+{% block content %}
+
+<div class="d-flex justify-content-between align-items-center mb-4 pb-3 border-bottom">
+    <h4 class="fw-semibold mb-0">My Account</h4>
+</div>
+
+<div id="accountContent">
+    <div class="text-center py-5 text-muted small">Loading...</div>
+</div>
+
+<!-- Edit Profile Modal -->
+<div class="modal fade" id="editModal" tabindex="-1">
+    <div class="modal-dialog modal-dialog-centered">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h5 class="modal-title fw-semibold">Edit Profile</h5>
+                <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+            </div>
+            <div class="modal-body">
+                <div id="editError" class="alert alert-danger d-none"></div>
+                <div class="mb-3">
+                    <label class="form-label fw-medium">Username</label>
+                    <input id="accUsername" type="text" class="form-control"/>
+                </div>
+                <div class="mb-3">
+                    <label class="form-label fw-medium">Email</label>
+                    <input id="accEmail" type="email" class="form-control"/>
+                </div>
+            </div>
+            <div class="modal-footer">
+                <button class="btn btn-outline-secondary" data-bs-dismiss="modal">Cancel</button>
+                <button class="btn btn-primary" onclick="saveAccount()">Save Changes</button>
+            </div>
+        </div>
+    </div>
+</div>
+
+<!-- Change Password Modal -->
+<div class="modal fade" id="passwordModal" tabindex="-1">
+    <div class="modal-dialog modal-dialog-centered">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h5 class="modal-title fw-semibold">Change Password</h5>
+                <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+            </div>
+            <div class="modal-body">
+                <div id="passwordError" class="alert alert-danger d-none"></div>
+                <div id="passwordSuccess" class="alert alert-success d-none"></div>
+                <div class="mb-3">
+                    <label class="form-label fw-medium">Current Password</label>
+                    <input id="currentPassword" type="password" class="form-control" placeholder="••••••••"/>
+                </div>
+                <div class="mb-3">
+                    <label class="form-label fw-medium">New Password</label>
+                    <input id="newPassword" type="password" class="form-control" placeholder="At least 6 characters" minlength="6"/>
+                </div>
+                <div class="mb-3">
+                    <label class="form-label fw-medium">Confirm New Password</label>
+                    <input id="confirmNewPassword" type="password" class="form-control" placeholder="Re-enter new password" minlength="6"/>
+                </div>
+            </div>
+            <div class="modal-footer">
+                <button class="btn btn-outline-secondary" data-bs-dismiss="modal">Cancel</button>
+                <button id="changePasswordBtn" class="btn btn-primary" onclick="changePassword()">Update Password</button>
+            </div>
+        </div>
+    </div>
+</div>
+
+<!-- Upload Picture Modal -->
+<div class="modal fade" id="pictureModal" tabindex="-1">
+    <div class="modal-dialog modal-dialog-centered">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h5 class="modal-title fw-semibold">Update Profile Picture</h5>
+                <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+            </div>
+            <div class="modal-body text-center">
+                <div id="pictureError" class="alert alert-danger d-none"></div>
+                <img id="picturePreview"
+                     src="/static/profile_pics/default.jpg"
+                     class="rounded-circle mb-3"
+                     width="96" height="96"
+                     style="object-fit:cover; border: 3px solid #dee2e6;"/>
+                <div>
+                    <label class="btn btn-outline-secondary btn-sm">
+                        Choose Image
+                        <input id="pictureFile" type="file"
+                               accept="image/jpeg,image/png,image/webp"
+                               class="d-none" onchange="previewImage(event)"/>
+                    </label>
+                    <div class="text-muted small mt-2">JPEG, PNG, or WebP · max 5MB</div>
+                </div>
+            </div>
+            <div class="modal-footer">
+                <button class="btn btn-outline-secondary" data-bs-dismiss="modal">Cancel</button>
+                <button class="btn btn-primary" onclick="uploadPicture()">Upload</button>
+            </div>
+        </div>
+    </div>
+</div>
+
+<!-- Delete Account Modal -->
+<div class="modal fade" id="deleteModal" tabindex="-1">
+    <div class="modal-dialog modal-dialog-centered">
+        <div class="modal-content text-center p-2">
+            <div class="modal-body py-4">
+                <p class="fs-1 mb-2">⚠️</p>
+                <h5 class="fw-bold mb-2">Delete your account?</h5>
+                <p class="text-muted small">
+                    This will permanently delete your account and all your posts.
+                    This cannot be undone.
+                </p>
+                <div id="deleteError" class="alert alert-danger d-none"></div>
+            </div>
+            <div class="modal-footer justify-content-center border-0 pt-0">
+                <button class="btn btn-outline-secondary" data-bs-dismiss="modal">Cancel</button>
+                <button id="confirmDeleteBtn" class="btn btn-danger" onclick="deleteAccount()">
+                    Yes, delete it
+                </button>
+            </div>
+        </div>
+    </div>
+</div>
+
+<script>
+    let currentUserId = null;
+    let editModal, pictureModal, deleteModal, passwordModal;
+
+    document.addEventListener('DOMContentLoaded', async function () {
+        editModal     = new bootstrap.Modal(document.getElementById('editModal'));
+        pictureModal  = new bootstrap.Modal(document.getElementById('pictureModal'));
+        deleteModal   = new bootstrap.Modal(document.getElementById('deleteModal'));
+        passwordModal = new bootstrap.Modal(document.getElementById('passwordModal'));
+
+        const token = getToken();
+        if (!token) { window.location.href = '/login'; return; }
+
+        try {
+            const res = await fetch('/api/auth/me', {
+                headers: { 'Authorization': `Bearer ${token}` }
+            });
+            if (!res.ok) { window.location.href = '/login'; return; }
+
+            const user = await res.json();
+            currentUserId = user.id;
+            const imgSrc  = user.image_path || '/static/profile_pics/default.jpg';
+
+            document.getElementById('accountContent').innerHTML = `
+                <div class="card border-0 shadow-sm">
+                    <div class="card-body p-4">
+
+                        <div class="d-flex align-items-center gap-3 mb-4">
+                            <div class="position-relative" style="width:64px; height:64px;">
+                                <img id="avatarImg" src="${imgSrc}"
+                                     onerror="this.src='/static/profile_pics/default.jpg'"
+                                     class="rounded-circle w-100 h-100"
+                                     style="object-fit:cover; border: 2px solid #dee2e6;"/>
+                                <button onclick="pictureModal.show()"
+                                        class="btn btn-primary btn-sm position-absolute bottom-0 end-0
+                                               rounded-circle p-0 d-flex align-items-center justify-content-center"
+                                        style="width:22px; height:22px; font-size:0.65rem;">
+                                    ✏️
+                                </button>
+                            </div>
+                            <div>
+                                <div class="fw-semibold fs-5">${user.username}</div>
+                                <div class="text-muted small">${user.email}</div>
+                                <div class="text-muted" style="font-size:0.75rem;">User #${user.id}</div>
+                            </div>
+                        </div>
+
+                        <hr/>
+
+                        <div class="mb-2 small">
+                            <span class="text-muted">Username</span>
+                            <span class="fw-medium ms-2">${user.username}</span>
+                        </div>
+                        <div class="mb-2 small">
+                            <span class="text-muted">Email</span>
+                            <span class="fw-medium ms-2">${user.email}</span>
+                        </div>
+                        <div class="mb-4 small">
+                            <span class="text-muted">User ID</span>
+                            <span class="fw-medium ms-2">#${user.id}</span>
+                        </div>
+
+                        <div class="d-flex flex-wrap gap-2">
+                            <button class="btn btn-primary btn-sm"
+                                    onclick="openEditModal('${user.username}', '${user.email}')">
+                                Edit Profile
+                            </button>
+                            <button class="btn btn-outline-secondary btn-sm"
+                                    onclick="openPasswordModal()">
+                                Change Password
+                            </button>
+                            <a href="/users/${user.id}/posts" class="btn btn-outline-secondary btn-sm">
+                                My Posts
+                            </a>
+                            <button class="btn btn-outline-secondary btn-sm" onclick="logout()">
+                                Logout
+                            </button>
+                            <button class="btn btn-outline-danger btn-sm ms-auto"
+                                    onclick="deleteModal.show()">
+                                Delete Account
+                            </button>
+                        </div>
+
+                    </div>
+                </div>
+            `;
+
+            document.getElementById('picturePreview').src = imgSrc;
+
+        } catch (e) {
+            console.error(e);
+            document.getElementById('accountContent').innerHTML =
+                '<p class="text-muted text-center">Failed to load account.</p>';
+        }
+    });
+
+    // ── Edit profile ──────────────────────────────
+    function openEditModal(username, email) {
+        document.getElementById('accUsername').value = username;
+        document.getElementById('accEmail').value    = email;
+        document.getElementById('editError').classList.add('d-none');
+        editModal.show();
+    }
+
+    async function saveAccount() {
+        const username = document.getElementById('accUsername').value.trim();
+        const email    = document.getElementById('accEmail').value.trim();
+        const errorDiv = document.getElementById('editError');
+        errorDiv.classList.add('d-none');
+
+        const res = await fetch(`/api/users/${currentUserId}`, {
+            method: 'PATCH',
+            headers: authHeaders(),
+            body: JSON.stringify({ username, email }),
+        });
+
+        if (res.ok) {
+            editModal.hide();
+            location.reload();
+        } else {
+            const data = await res.json();
+            errorDiv.textContent = data.detail || 'Failed to update.';
+            errorDiv.classList.remove('d-none');
+        }
+    }
+
+    // ── Change password ───────────────────────────
+    function openPasswordModal() {
+        document.getElementById('currentPassword').value     = '';
+        document.getElementById('newPassword').value          = '';
+        document.getElementById('confirmNewPassword').value   = '';
+        document.getElementById('passwordError').classList.add('d-none');
+        document.getElementById('passwordSuccess').classList.add('d-none');
+        passwordModal.show();
+    }
+
+    async function changePassword() {
+        const currentPassword = document.getElementById('currentPassword').value;
+        const newPassword     = document.getElementById('newPassword').value;
+        const confirmPassword = document.getElementById('confirmNewPassword').value;
+        const errorDiv         = document.getElementById('passwordError');
+        const successDiv       = document.getElementById('passwordSuccess');
+        const btn              = document.getElementById('changePasswordBtn');
+
+        errorDiv.classList.add('d-none');
+        successDiv.classList.add('d-none');
+
+        if (!currentPassword || !newPassword || !confirmPassword) {
+            errorDiv.textContent = 'All fields are required.';
+            errorDiv.classList.remove('d-none');
+            return;
+        }
+
+        if (newPassword !== confirmPassword) {
+            errorDiv.textContent = "New passwords don't match.";
+            errorDiv.classList.remove('d-none');
+            return;
+        }
+
+        btn.disabled    = true;
+        btn.textContent = 'Updating...';
+
+        try {
+            const res = await fetch('/api/auth/me/change-password', {
+                method: 'PATCH',
+                headers: authHeaders(),
+                body: JSON.stringify({
+                    current_password: currentPassword,
+                    new_password: newPassword,
+                }),
+            });
+
+            const data = await res.json();
+
+            if (!res.ok) {
+                errorDiv.textContent = data.detail || 'Failed to change password.';
+                errorDiv.classList.remove('d-none');
+                btn.disabled    = false;
+                btn.textContent = 'Update Password';
+                return;
+            }
+
+            successDiv.textContent = data.message || 'Password changed successfully.';
+            successDiv.classList.remove('d-none');
+            document.getElementById('currentPassword').value    = '';
+            document.getElementById('newPassword').value         = '';
+            document.getElementById('confirmNewPassword').value  = '';
+            btn.disabled    = false;
+            btn.textContent = 'Update Password';
+
+            setTimeout(() => { passwordModal.hide(); }, 1500);
+
+        } catch (err) {
+            errorDiv.textContent = 'Network error. Please try again.';
+            errorDiv.classList.remove('d-none');
+            btn.disabled    = false;
+            btn.textContent = 'Update Password';
+        }
+    }
+
+    // ── Upload picture ────────────────────────────
+    function previewImage(event) {
+        const file = event.target.files[0];
+        if (!file) return;
+        const reader = new FileReader();
+        reader.onload = e => document.getElementById('picturePreview').src = e.target.result;
+        reader.readAsDataURL(file);
+    }
+
+    async function uploadPicture() {
+        const file     = document.getElementById('pictureFile').files[0];
+        const errorDiv = document.getElementById('pictureError');
+        errorDiv.classList.add('d-none');
+
+        if (!file) {
+            errorDiv.textContent = 'Please choose an image first.';
+            errorDiv.classList.remove('d-none');
+            return;
+        }
+
+        const formData = new FormData();
+        formData.append('file', file);
+
+        const res = await fetch(`/api/users/${currentUserId}/picture`, {
+            method: 'PATCH',
+            headers: { 'Authorization': `Bearer ${getToken()}` },
+            body: formData,
+        });
+
+        if (res.ok) {
+            pictureModal.hide();
+            location.reload();
+        } else {
+            const data = await res.json();
+            errorDiv.textContent = data.detail || 'Upload failed.';
+            errorDiv.classList.remove('d-none');
+        }
+    }
+
+    // ── Delete account ────────────────────────────
+    async function deleteAccount() {
+        const btn      = document.getElementById('confirmDeleteBtn');
+        const errorDiv = document.getElementById('deleteError');
+        errorDiv.classList.add('d-none');
+        btn.disabled    = true;
+        btn.textContent = 'Deleting...';
+
+        const res = await fetch(`/api/users/${currentUserId}`, {
+            method: 'DELETE',
+            headers: { 'Authorization': `Bearer ${getToken()}` },
+        });
+
+        if (res.ok || res.status === 204) {
+            clearToken();
+            window.location.href = '/';
+        } else {
+            const data = await res.json().catch(() => ({}));
+            errorDiv.textContent = data.detail || 'Failed to delete account.';
+            errorDiv.classList.remove('d-none');
+            btn.disabled    = false;
+            btn.textContent = 'Yes, delete it';
+        }
+    }
+</script>
+
+{% endblock %}

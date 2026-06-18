@@ -1,0 +1,174 @@
+{% extends "base.html" %}
+{% block content %}
+
+<div class="d-flex justify-content-between align-items-center mb-4 pb-3 border-bottom">
+    <h4 class="fw-semibold mb-0">Admin &middot; User Management</h4>
+    <span id="roleLabel" class="badge text-bg-secondary"></span>
+</div>
+
+<div id="adminError" class="alert alert-danger d-none"></div>
+<div id="adminContent">
+    <div class="text-center py-5 text-muted small">Loading...</div>
+</div>
+
+<script>
+    let CURRENT_USER_ID = null;
+    let IS_SUPERADMIN = false;
+
+    document.addEventListener('DOMContentLoaded', async function () {
+        const token = getToken();
+        if (!token) { window.location.href = '/login'; return; }
+
+        try {
+            const meRes = await fetch('/api/auth/me', { headers: { 'Authorization': `Bearer ${token}` } });
+            if (!meRes.ok) { window.location.href = '/login'; return; }
+            const me = await meRes.json();
+
+            const myRoles = me.roles || [];
+            const isAdmin = myRoles.includes('admin');
+            IS_SUPERADMIN = myRoles.includes('superadmin');
+            CURRENT_USER_ID = me.id;
+
+            if (!isAdmin && !IS_SUPERADMIN) {
+                window.location.href = '/';
+                return;
+            }
+
+            document.getElementById('roleLabel').textContent = IS_SUPERADMIN ? 'Superadmin' : 'Admin';
+            document.getElementById('roleLabel').classList.add(IS_SUPERADMIN ? 'text-bg-dark' : 'text-bg-primary');
+
+            await loadUsers();
+
+        } catch (e) {
+            console.error(e);
+            showError('Failed to load admin panel.');
+        }
+    });
+
+    function showError(msg) {
+        const errorDiv = document.getElementById('adminError');
+        errorDiv.textContent = msg;
+        errorDiv.classList.remove('d-none');
+    }
+
+    async function loadUsers() {
+        const res = await fetch('/api/users', { headers: authHeaders() });
+        if (!res.ok) {
+            showError('Failed to load users.');
+            return;
+        }
+        const users = await res.json();
+        renderUsers(users);
+    }
+
+    function roleBadges(roles) {
+        return roles.map(r => {
+            const cls = r === 'superadmin' ? 'text-bg-dark' : r === 'admin' ? 'text-bg-primary' : 'text-bg-secondary';
+            return `<span class="badge ${cls} me-1">${r}</span>`;
+        }).join('');
+    }
+
+    function renderUsers(users) {
+        const container = document.getElementById('adminContent');
+
+        const rows = users.map(u => {
+            const roles = u.roles || [];
+            const isUserSuperadmin = roles.includes('superadmin');
+            const isUserAdmin = roles.includes('admin');
+            const isMe = u.id === CURRENT_USER_ID;
+
+            let actionButtons = '';
+
+            // Only a superadmin can promote/demote, and never on the superadmin account itself
+            if (IS_SUPERADMIN && !isUserSuperadmin) {
+                if (isUserAdmin) {
+                    actionButtons += `<button class="btn btn-sm btn-outline-secondary" onclick="demoteUser(${u.id}, '${u.username}')">Demote</button> `;
+                } else {
+                    actionButtons += `<button class="btn btn-sm btn-outline-primary" onclick="promoteUser(${u.id}, '${u.username}')">Promote to admin</button> `;
+                }
+            }
+
+            // Admins and superadmins can delete other accounts, never their own from here, never the superadmin
+            if (!isUserSuperadmin && !isMe) {
+                actionButtons += `<button class="btn btn-sm btn-outline-danger" onclick="deleteUserAdmin(${u.id}, '${u.username}')">Delete</button>`;
+            }
+
+            return `
+                <tr>
+                    <td class="text-muted">#${u.id}</td>
+                    <td>
+                        <div class="d-flex align-items-center gap-2">
+                            <img src="${u.image_path}" onerror="this.src='/static/profile_pics/default.jpg'"
+                                 class="rounded-circle" width="28" height="28" style="object-fit:cover;"/>
+                            <span class="fw-medium">${u.username}</span>
+                            ${isMe ? '<span class="badge text-bg-light text-muted border">you</span>' : ''}
+                        </div>
+                    </td>
+                    <td>${roleBadges(roles)}</td>
+                    <td class="text-end">${actionButtons}</td>
+                </tr>
+            `;
+        }).join('');
+
+        container.innerHTML = `
+            <div class="card border-0 shadow-sm">
+                <div class="table-responsive">
+                    <table class="table align-middle mb-0">
+                        <thead>
+                            <tr>
+                                <th>ID</th>
+                                <th>User</th>
+                                <th>Roles</th>
+                                <th class="text-end">Actions</th>
+                            </tr>
+                        </thead>
+                        <tbody>${rows}</tbody>
+                    </table>
+                </div>
+            </div>
+        `;
+    }
+
+    async function promoteUser(userId, username) {
+        if (!confirm(`Promote ${username} to admin?`)) return;
+        const res = await fetch(`/api/rbac/users/${userId}/promote`, {
+            method: 'PATCH',
+            headers: authHeaders(),
+        });
+        const data = await res.json();
+        if (res.ok) {
+            await loadUsers();
+        } else {
+            showError(data.detail || 'Failed to promote user.');
+        }
+    }
+
+    async function demoteUser(userId, username) {
+        if (!confirm(`Remove admin role from ${username}?`)) return;
+        const res = await fetch(`/api/rbac/users/${userId}/demote`, {
+            method: 'PATCH',
+            headers: authHeaders(),
+        });
+        const data = await res.json();
+        if (res.ok) {
+            await loadUsers();
+        } else {
+            showError(data.detail || 'Failed to demote user.');
+        }
+    }
+
+    async function deleteUserAdmin(userId, username) {
+        if (!confirm(`Permanently delete ${username}'s account and all their posts? This cannot be undone.`)) return;
+        const res = await fetch(`/api/users/${userId}`, {
+            method: 'DELETE',
+            headers: { 'Authorization': `Bearer ${getToken()}` },
+        });
+        if (res.ok || res.status === 204) {
+            await loadUsers();
+        } else {
+            const data = await res.json().catch(() => ({}));
+            showError(data.detail || 'Failed to delete user.');
+        }
+    }
+</script>
+{% endblock %}
