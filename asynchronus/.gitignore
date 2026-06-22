@@ -22,3 +22,5 @@ media/
 # OS Files
 .DS_Store
 Thumbs.db
+
+app.log

@@ -1,38 +1,45 @@
-from fastapi import HTTPException, status, Depends, APIRouter,Query
+from fastapi import HTTPException, status, Depends, APIRouter, Query
 from sqlalchemy.ext.asyncio import AsyncSession
 from typing import Annotated
-from schema import Post_response, PostCreate, PostUpdate,PaginatedPostsResponse
-from sqlalchemy import select,func
+from schema import Post_response, PostCreate, PostUpdate, PaginatedPostsResponse
+from sqlalchemy import select, func
 from sqlalchemy.orm import selectinload
 import models
 from database import get_db
 from auth import CurrentUser
 from models import RoleName
 
+import logging
+logger = logging.getLogger(__name__)
+
 router = APIRouter()
+
+
 @router.post("", response_model=Post_response, status_code=status.HTTP_201_CREATED)
 async def create_post(
     post: PostCreate,
     db: Annotated[AsyncSession, Depends(get_db)],
-    current_user:CurrentUser,
+    current_user: CurrentUser,
 ):
     new_post = models.Post(
         title=post.title,
         content=post.content,
-        user_id=current_user.id,   #  comes from the logged-in user, not the request body
+        user_id=current_user.id,
     )
     db.add(new_post)
     await db.commit()
     await db.refresh(new_post, attribute_names=["author"])
+
+    logger.info(f"Post created: id={new_post.id}, by user_id={current_user.id}")  # ✅
     return new_post
 
 
 @router.get("", response_model=PaginatedPostsResponse)
 async def get_all_posts(db: Annotated[AsyncSession, Depends(get_db)],
-                        skip:Annotated[int, Query(ge=0)]=0,
-                        limit:Annotated[int, Query(ge=1,le=100)]=10):
-    count_result=await db.execute(select(func.count()).select_from(models.Post))
-    total=count_result.scalar()
+                        skip: Annotated[int, Query(ge=0)] = 0,
+                        limit: Annotated[int, Query(ge=1, le=100)] = 10):
+    count_result = await db.execute(select(func.count()).select_from(models.Post))
+    total = count_result.scalar()
     result = await db.execute(
         select(models.Post)
         .options(selectinload(models.Post.author))
@@ -41,35 +48,15 @@ async def get_all_posts(db: Annotated[AsyncSession, Depends(get_db)],
         .limit(limit)
     )
     posts = result.scalars().all()
-    has_more=skip+len(posts)<total
+    has_more = skip + len(posts) < total
     return PaginatedPostsResponse(
-        posts= [Post_response.model_validate(post) for post in posts],
-        total= total,
-        skip= skip,
-        limit= limit,
+        posts=[Post_response.model_validate(post) for post in posts],
+        total=total,
+        skip=skip,
+        limit=limit,
         has_more=has_more,
     )
 
-
-
-# @router.post("", response_model=Post_response, status_code=status.HTTP_201_CREATED)
-# async def create_post(post: PostCreate, db: Annotated[AsyncSession, Depends(get_db)]):
-#     result = await db.execute(select(models.User).where(models.User.id == post.user_id))
-#     user = result.scalars().first()
-#     if not user:
-#         raise HTTPException(
-#             status_code=status.HTTP_404_NOT_FOUND,
-#             detail="User not found"
-#         )   
-#     new_post = models.Post(
-#         title=post.title,
-#         content=post.content,
-#         user_id=post.user_id,
-#     )
-#     db.add(new_post)
-#     await db.commit()
-#     await db.refresh(new_post, attribute_names=["author"])
-#     return new_post
 
 @router.get("/{post_id}", response_model=Post_response)
 async def get_post(post_id: int, db: Annotated[AsyncSession, Depends(get_db)]):
@@ -80,12 +67,8 @@ async def get_post(post_id: int, db: Annotated[AsyncSession, Depends(get_db)]):
     )
     post = result.scalars().first()
     if not post:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail="Post is not found"
-        )
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Post is not found")
     return post
-
 
 
 @router.put("/{post_id}", response_model=Post_response)
@@ -106,7 +89,11 @@ async def update_post_full(
     is_privileged = bool(current_user.role_names & {RoleName.admin.value, RoleName.superadmin.value})
 
     if not is_owner and not is_privileged:
+        logger.warning(f"Unauthorized PUT attempt on post_id={post_id} by user_id={current_user.id}")  # ✅
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Not authorized to update")
+
+    if not is_owner and is_privileged:
+        logger.info(f"Privileged edit: user_id={current_user.id} (role) edited post_id={post_id} owned by user_id={post.user_id}")  # ✅
 
     post.title = post_data.title
     post.content = post_data.content
@@ -126,7 +113,13 @@ async def delete_post(post_id: int, current_user: CurrentUser, db: Annotated[Asy
     is_privileged = bool(current_user.role_names & {RoleName.admin.value, RoleName.superadmin.value})
 
     if not is_owner and not is_privileged:
+        logger.warning(f"Unauthorized DELETE attempt on post_id={post_id} by user_id={current_user.id}")  # ✅
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Not authorized to update")
+
+    if not is_owner and is_privileged:
+        logger.info(f"Privileged delete: user_id={current_user.id} (role) deleted post_id={post_id} owned by user_id={post.user_id}")  # ✅
+    else:
+        logger.info(f"Post deleted: id={post_id}, by owner user_id={current_user.id}")  # ✅
 
     await db.delete(post)
     await db.commit()
@@ -150,7 +143,11 @@ async def update_post_partial(
     is_privileged = bool(current_user.role_names & {RoleName.admin.value, RoleName.superadmin.value})
 
     if not is_owner and not is_privileged:
+        logger.warning(f"Unauthorized PATCH attempt on post_id={post_id} by user_id={current_user.id}")  # ✅
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Not authorized to update")
+
+    if not is_owner and is_privileged:
+        logger.info(f"Privileged edit: user_id={current_user.id} (role) patched post_id={post_id} owned by user_id={post.user_id}")  # ✅
 
     data = post_data.model_dump(exclude_unset=True)
     for field, value in data.items():

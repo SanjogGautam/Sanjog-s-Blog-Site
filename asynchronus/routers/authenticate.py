@@ -18,31 +18,29 @@ from auth import generate_reset_token,hash_reset_token
 from email_utils import send_password_reset_email
 from schema import ChangePasswordRequest,ForgotPasswordRequest,ResetPasswordRequest
 
+from logging_config import setup_logging
+setup_logging()
+
+import logging
+logger = logging.getLogger(__name__)
+
 router = APIRouter()
 
 
 # ── REGISTER ──────────────────────────────────
 @router.post("/register", response_model=user_private, status_code=status.HTTP_201_CREATED)
 async def register(user: user_create, db: Annotated[AsyncSession, Depends(get_db)]):
-    # check username not taken
     result = await db.execute(
         select(models.User).where(func.lower(models.User.username) == user.username.lower())
     )
     if result.scalars().first():
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail="username already exists",
-        )
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="username already exists")
 
-    # check email not taken
     result = await db.execute(
         select(models.User).where(func.lower(models.User.email) == user.email.lower())
     )
     if result.scalars().first():
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail="email already exists",
-        )
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="email already exists")
 
     new_user = models.User(
         username=user.username,
@@ -52,6 +50,8 @@ async def register(user: user_create, db: Annotated[AsyncSession, Depends(get_db
     db.add(new_user)
     await db.commit()
     await db.refresh(new_user)
+
+    logger.info(f"New user registered: id={new_user.id}, username={new_user.username}")  # ✅
     return new_user
 
 
@@ -61,15 +61,14 @@ async def login_for_access_token(
     form_data: Annotated[OAuth2PasswordRequestForm, Depends()],
     db: Annotated[AsyncSession, Depends(get_db)]
 ):
-    # OAuth2PasswordRequestForm always names the field "username" — we treat it as email
     email = form_data.username
-
     result = await db.execute(
         select(models.User).where(func.lower(models.User.email) == email.lower())
     )
     user = result.scalars().first()
 
     if not user or not verify_password(form_data.password, user.password_hash):
+        logger.warning(f"Failed login attempt for email={email.lower()}")  # ✅
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="Invalid email or password",
@@ -80,8 +79,8 @@ async def login_for_access_token(
         data={"sub": str(user.id)},
         expires_delta=timedelta(minutes=settings.access_token_expire_minutes)
     )
+    logger.info(f"User logged in: id={user.id}")  # ✅
     return token(access_token=access_token, token_type="bearer")
-
 
 # ── CURRENT USER ──────────────────────────────
 @router.get("/me", response_model=user_private)
@@ -94,49 +93,43 @@ async def get_current_user(
 async def forgot_password(
     request_data: ForgotPasswordRequest,
     background_tasks: BackgroundTasks,
-    db: Annotated[AsyncSession,Depends(get_db)],
+    db: Annotated[AsyncSession, Depends(get_db)],
 ):
-    result=await db.execute(
-        select(models.User).where(func.lower(models.User.email) == request_data.email.lower(),
-                                  ),
+    result = await db.execute(
+        select(models.User).where(func.lower(models.User.email) == request_data.email.lower())
     )
     user = result.scalars().first()
-    if user: 
+
+    if user:
         await db.execute(
-            sql_delete(models.PasswordResetToken).where(
-                models.PasswordResetToken.user_id == user.id,
-            ),
+            sql_delete(models.PasswordResetToken).where(models.PasswordResetToken.user_id == user.id)
         )
         token = generate_reset_token()
-        token_hash=hash_reset_token(token)
-        expires_at = datetime.now(UTC) + timedelta(
-            minutes= settings.reset_token_expire_minutes
-        )
+        token_hash = hash_reset_token(token)
+        expires_at = datetime.now(UTC) + timedelta(minutes=settings.reset_token_expire_minutes)
+
         reset_token = models.PasswordResetToken(
-            user_id=user.id,
-            token_hash=token_hash,
-            expires_at=expires_at,
+            user_id=user.id, token_hash=token_hash, expires_at=expires_at,
         )
         db.add(reset_token)
         await db.commit()
 
         background_tasks.add_task(
-            send_password_reset_email,
-            email_to=user.email,
-            username=user.username,
-            token=token,
+            send_password_reset_email, email_to=user.email, username=user.username, token=token,
         )
-    return {"message":"If an account with that email exists, a password reset link has been sent."}
+        logger.info(f"Password reset token generated for user_id={user.id}")  # ✅
+    else:
+        logger.info("Password reset requested for an email with no matching account")  # ✅ — no email/id logged, by design
+
+    return {"message": "If an account with that email exists, a password reset link has been sent."}
+
 
 @router.post("/reset-password", status_code=status.HTTP_200_OK)
 async def reset_password(
     request_data: ResetPasswordRequest,
     db: Annotated[AsyncSession, Depends(get_db)],
 ):
-    # 1. Hash the incoming token so we can compare it against what's stored
     token_hash = hash_reset_token(request_data.token)
-
-    # 2. Look up a matching, not-yet-expired reset token
     result = await db.execute(
         select(models.PasswordResetToken).where(
             models.PasswordResetToken.token_hash == token_hash,
@@ -146,48 +139,36 @@ async def reset_password(
     reset_token = result.scalars().first()
 
     if not reset_token:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail="Invalid or expired reset link. Please request a new one.",
-        )
+        logger.warning("Password reset attempted with invalid or expired token")  # ✅
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Invalid or expired reset link. Please request a new one.")
 
-    # 3. Look up the user this token belongs to
-    result = await db.execute(
-        select(models.User).where(models.User.id == reset_token.user_id)
-    )
+    result = await db.execute(select(models.User).where(models.User.id == reset_token.user_id))
     user = result.scalars().first()
 
     if not user:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail="Invalid or expired reset link. Please request a new one.",
-        )
+        logger.warning(f"Password reset token valid but user_id={reset_token.user_id} no longer exists")  # ✅
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Invalid or expired reset link. Please request a new one.")
 
-    # 4. Update the password
     user.password_hash = hash_password(request_data.new_password)
-
-    # 5. Delete the token so it can't be reused
     await db.delete(reset_token)
-
     await db.commit()
 
+    logger.info(f"Password successfully reset for user_id={user.id}") 
     return {"message": "Your password has been reset successfully. You can now log in."}
 
-#change password to the users who are already logged in and have access token
-@router.put("/me/change-password", status_code=status.HTTP_200_OK)
+
+@router.patch("/me/change-password", status_code=status.HTTP_200_OK)  
 async def change_password(
     password_data: ChangePasswordRequest,
     current_user: CurrentUser,
     db: Annotated[AsyncSession, Depends(get_db)],
 ):
     if not verify_password(password_data.current_password, current_user.password_hash):
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail="Current password is incorrect.",
-        )
+        logger.warning(f"Failed change-password attempt for user_id={current_user.id} — wrong current password")  # ✅
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Current password is incorrect.")
 
     current_user.password_hash = hash_password(password_data.new_password)
     await db.commit()
 
+    logger.info(f"Password changed for user_id={current_user.id}")  
     return {"message": "Password changed successfully."}
-        

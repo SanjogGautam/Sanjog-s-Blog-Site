@@ -9,9 +9,9 @@ from fastapi.exception_handlers import (
 from sqlalchemy.ext.asyncio import AsyncSession
 from starlette.exceptions import HTTPException as starletteHTTPException
 from typing import Annotated
-from sqlalchemy import select, func
+from sqlalchemy import select, func, text
 from sqlalchemy.orm import selectinload
-from routers import authenticate, rbac          # rbac
+from routers import authenticate, rbac # rbac
 import models
 from database import Base, engine, get_db, session   # session
 from routers import users, posts
@@ -45,6 +45,19 @@ app.include_router(authenticate.router, prefix="/api/auth", tags=["Auth"])
 app.include_router(users.router, prefix="/api/users", tags=["users"])
 app.include_router(posts.router, prefix="/api/posts", tags=['posts'])
 app.include_router(rbac.router, prefix="/api/rbac", tags=["RBAC"])    # added
+
+@app.get("/health")
+async def healt_check(db: Annotated[AsyncSession,Depends(get_db)]):
+    try:
+        await db.execute(text("SELECT 1"))
+    except Exception as exc:
+        raise HTTPException(
+            status_code= status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Database Unavailable",
+        ) from exc
+    return {
+        "status":"healthy"
+    }
 
 
 @app.get("/", response_class=HTMLResponse, include_in_schema=False)

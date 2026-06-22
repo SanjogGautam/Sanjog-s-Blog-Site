@@ -8,6 +8,9 @@ from models import RoleName
 from database import get_db
 from auth import CurrentUser
 
+import logging
+logger = logging.getLogger(__name__)
+
 router = APIRouter()
 
 
@@ -15,11 +18,15 @@ router = APIRouter()
 
 async def seed_roles(db: AsyncSession) -> None:
     """Ensure the three role rows exist. Safe to call on every startup."""
+    created_any = False
     for role_name in RoleName:
         result = await db.execute(select(models.Role).where(models.Role.name == role_name))
         if not result.scalars().first():
             db.add(models.Role(name=role_name))
+            created_any = True
     await db.commit()
+    if created_any:
+        logger.info("Role table seeded (one or more roles were missing and have been created)")  # ✅
 
 
 async def ensure_superadmin(db: AsyncSession, email: str) -> None:
@@ -29,7 +36,8 @@ async def ensure_superadmin(db: AsyncSession, email: str) -> None:
     )
     user = result.scalars().first()
     if not user:
-        return  # account doesn't exist yet — nothing to attach the role to
+        logger.warning(f"SUPERADMIN_EMAIL ({email}) does not match any existing account yet")  # ✅
+        return
 
     result = await db.execute(
         select(models.Role).where(models.Role.name == RoleName.superadmin)
@@ -39,6 +47,7 @@ async def ensure_superadmin(db: AsyncSession, email: str) -> None:
     if superadmin_role not in user.roles:
         user.roles.append(superadmin_role)
         await db.commit()
+        logger.info(f"Superadmin role attached to user_id={user.id} ({user.username})")  # ✅
 
 
 # ── PERMISSION DEPENDENCIES (used by other routers to protect routes) ─
@@ -51,6 +60,10 @@ def require_role(*allowed_roles: RoleName):
     async def checker(current_user: CurrentUser) -> models.User:
         allowed_names = {r.value for r in allowed_roles}
         if not (current_user.role_names & allowed_names):
+            logger.warning(
+                f"Permission denied: user_id={current_user.id} (roles={current_user.role_names}) "
+                f"attempted an action requiring one of {allowed_names}"
+            )  # ✅
             raise HTTPException(
                 status_code=status.HTTP_403_FORBIDDEN,
                 detail="You don't have permission to perform this action.",
@@ -80,16 +93,11 @@ async def promote_user(
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="User not found")
 
     if target_user.has_role(RoleName.superadmin):
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail="Cannot modify the superadmin's role.",
-        )
+        logger.warning(f"superadmin user_id={current_user.id} attempted to modify the superadmin's own role")  # ✅
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Cannot modify the superadmin's role.")
 
     if target_user.has_role(RoleName.admin):
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail="User is already an admin.",
-        )
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="User is already an admin.")
 
     result = await db.execute(select(models.Role).where(models.Role.name == RoleName.admin))
     admin_role = result.scalars().first()
@@ -97,6 +105,10 @@ async def promote_user(
     await db.commit()
     await db.refresh(target_user)
 
+    logger.info(
+        f"ROLE CHANGE: user_id={current_user.id} promoted user_id={target_user.id} "
+        f"({target_user.username}) to admin"
+    )  # ✅
     return {"message": f"{target_user.username} has been promoted to admin."}
 
 
@@ -112,21 +124,21 @@ async def demote_user(
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="User not found")
 
     if target_user.has_role(RoleName.superadmin):
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail="Cannot modify the superadmin's role.",
-        )
+        logger.warning(f"superadmin user_id={current_user.id} attempted to modify the superadmin's own role")  # ✅
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Cannot modify the superadmin's role.")
 
     result = await db.execute(select(models.Role).where(models.Role.name == RoleName.admin))
     admin_role = result.scalars().first()
 
     if admin_role not in target_user.roles:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail="User is not currently an admin.",
-        )
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="User is not currently an admin.")
+
     target_user.roles.remove(admin_role)
     await db.commit()
     await db.refresh(target_user)
-    
+
+    logger.info(
+        f"ROLE CHANGE: user_id={current_user.id} demoted user_id={target_user.id} "
+        f"({target_user.username}) from admin"
+    )  # ✅
     return {"message": f"{target_user.username} has been demoted to a regular user."}
